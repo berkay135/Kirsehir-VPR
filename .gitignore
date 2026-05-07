@@ -1,0 +1,10 @@
+// Ignore the docx_images directory and the Kirsehir_VPR_CrossSource_Photos directory
+docx_images/
+Kirsehir_VPR_CrossSource_Photos/
+
+
+
+
+
+kirsehir_data/
+kirsehir_VPR_DINOv2_v5_Final

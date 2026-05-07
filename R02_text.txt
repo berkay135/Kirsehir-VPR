@@ -1,0 +1,1119 @@
+Foundation Models for Visual Place Recognition in Mid-Sized Anatolian Cities: 
+A Systematic Evaluation of DINOv2-Based Pipelines on Kırşehir 
+ 
+ 
+ 
+Abstract 
+Visual place recognition (VPR) has advanced rapidly with the rise of self -supervised 
+foundation models, yet benchmarks remain geographically concentrated on large 
+Western and East Asian cities. Whether the design choices established on these 
+benchmarks tra nsfer to mid -sized, architecturally homogeneous cities outside this 
+distribution is an open question. This study presents a systematic empirical evaluation 
+of a DINOv2-based two-stage VPR pipeline on Kırşehir, a mid -sized Anatolian city in 
+Central Turkey, and examines how its main design choices — partial fine -tuning, 
+pooling strategy, local -feature re -ranking, and backbone size — behave under this 
+visual regime. We constructed a Google Street View dataset of 26,220 images 
+captured at 6,555 unique coordinate points on 654 streets with four cardinal headings 
+per point, covering approximately 28.80 km². The dataset was partitioned via a 0.002°-
+resolution grid-based geographic split into 18,140 training, 6,060 database, and 2,020 
+query images. The pipeline combines a partially fine-tuned DINOv2 ViT-B/14 backbone 
+(last four Transformer blocks unfrozen) with Generalized Mean (GeM) pooling and a 
+512-dimensional projection head, trained under Multi -Similarity Loss with hard 
+negative mining, followed by an ALIKED + LightGlue local-matching re-ranking stage. 
+Controlled ablations isolated the contributions of the loss function, the pooling strategy, 
+the backbone size, and two re -ranking criteria. Partial fine -tuning improved Top -1 
+street-name accuracy from 56.14% (froze n DINOv2) to 74.70% and reduced the 
+median localization error from 49.8 m to 8.2 m. Contrary to the common assumption in 
+the VPR literature, a CLS -token variant slightly outperformed the GeM -pooled main 
+model (76.58% vs. 74.70% street accuracy; 5.3 m vs. 8.2 m median error). LightGlue-
+based re-ranking degraded the output of the global descriptor in every configuration 
+tested — uniform application dropped street accuracy to 48.32–49.41%, and a 
+conditional pipeline produced a monotonic performance decline across six confidence 
+thresholds. The ViT-S/14 variant retained 94.5% of the R@1<100 m performance of 
+ViT-B/14 while using 25.6% of the parameters and 34.3% of the single-image inference 
+time on an NVIDIA L4 GPU. A spatial error analysis attributed 16.2% of errors to high-
+confidence perceptual aliasing concentrated on repetitive residential streets and the 
+long-tail errors to database -sparsity effects. Conclusions. Foundation-model-based 
+VPR delivers strong single -city performance on this under -represented urban setting 
+when the last few Transformer blocks are fine -tuned, but several design choices 
+considered optimal on large Western benchmarks — GeM pooling over CLS 
+aggregation and local-feature re-ranking as a default second stage — do not transfer. 
+A single-stage ViT-S/14 pipeline offers a favorable accuracy –efficiency trade-off for 
+deployment-oriented systems. The reported negative result on LightGlue re -ranking 
+highlights the need for city -specific empirical validation of standard VPR design 
+patterns. 
+Keywords: Visual place recognition; foundation models; DINOv2; fine -tuning; GeM 
+pooling; LightGlue; re -ranking; vision transformer; Google Street View; computer 
+vision, machine learning. 
+ 
+Introduction 
+Visual place recognition (VPR) is the task of estimating where an image was taken by 
+matching it against a geo -referenced database (Lowry et al. 2015) . It is a core 
+component of mobile robotics, autonomous driving, augmented reality, and geo -
+referenced media indexing, and it is one of the few localization modalities that can 
+function in GPS-denied environments such as de nse urban canyons, indoor spaces, 
+and tunnels. The last decade has seen a rapid evolution of VPR methods, from bag -
+of-words and VLAD aggregation of hand -crafted descriptors (Cummins & Newman 
+2008), through learned CNN-based global descriptors such as NetVLAD (Arandjelovic 
+et al. 2016), to large-scale classification-based training schemes (Berton et al. 2022)  
+and, most recently, the adoption of foundation models as backbones (Oquab et al. 
+2023). 
+Despite this progress, VPR benchmarks have remained geographically concentrated. 
+The widely used Pittsburgh30k, Tokyo24/7, and Mapillary Street -Level Sequences 
+(MSLS) datasets cover predominantly North American, Japanese, and globally 
+distributed but photographer-curated urban imagery (Arandjelovic et al. 2016; Torii et 
+al. 2015; Warburg et al. 2020) , and the main large -scale training datasets — San 
+Francisco eXtra Large (SF -XL) and GSV -Cities — center on North American and 
+major-city imagery (Berton et al. 2022). Studies that validate VPR methods on mid -
+sized, non-Western, architecturally homogeneous cities remain scarce, which has two 
+related consequences. First, it is difficult to assess how well the design choices 
+established on these benchmarks genera lize to the urban distribution in which many 
+practical deployments would occur — Anatolian, Balkan, Middle Eastern, or Central 
+Asian cities that share a distinctive built -environment profile. Second, negative or 
+contradictory results on such cities are largely invisible, which can produce an inflated 
+sense of how well standard two-stage pipelines transfer across contexts. 
+This paper contributes a systematic empirical study of foundation-model-based visual 
+place recognition on Kırşehir, a mid -sized Anatolian city in Central Turkey, with three 
+characteristic properties that make it a useful stress test for standard VPR 
+methodology: (i) a compact urban core of approximately 28.80 km² with limited 
+topographic variation, (ii) a building stock dominated by repetit ive low -to-mid-rise 
+residential facades, sharing a narrow stylistic vocabulary, and (iii) dense narrow-street 
+geometry in which cross -street visual differences are fine -grained rather than 
+categorical. These properties amplify the fine -grained retrieval pr oblem and make 
+Kırşehir a challenging test bed for a class of methods that were designed and validated 
+under considerably different visual statistics. 
+Motivated by the observations above, the present study is organized around four 
+research questions. 
+RQ1 — Adaptation. How much of the performance of a DINOv2 -based VPR pipeline 
+on a mid-sized, architecturally homogeneous Anatolian city is contributed by the pre -
+trained foundation model itself, and how much by fine-tuning on a city-specific dataset? 
+Specifically, what is the gap between a frozen DINOv2 feature extractor and a partially 
+fine-tuned one, and is the gap uniform across recall thresholds? 
+RQ2 — Design Choices. On such a dataset, do the default design choices of 
+foundation-model-based VPR — patch-level GeM pooling and Multi-Similarity Loss — 
+dominate alternatives in a controlled ablation? In particular, how does CLS -token 
+aggregation compare with GeM pooling when both are trained under identical 
+conditions? 
+RQ3 — Re-Ranking. Does a standard LightGlue-based re-ranking stage improve upon 
+a well-adapted global descriptor on Google Street View imagery of a small Anatolian 
+city, and if not, what are the structural reasons for the discrepancy with results reported 
+on large urban benchmarks? 
+RQ4 — Efficiency. What is the accuracy–efficiency trade-off between the ViT-S/14 and 
+ViT-B/14 variants of DINOv2 under the identical fine -tuning protocol, and does the 
+smaller backbone preserve the dominant patterns observed with the larger one? 
+This paper makes the following contributions. 
+(i) We construct and analyze a dedicated Google Street View dataset of Kırşehir 
+comprising 26,220 images captured at 6,555 unique coordinate points across 654 
+streets, with four cardinal headings per point and an approximately 28.80 km² coverage 
+area. The dataset is partitioned into training, database, and query sets using a grid -
+based geographic split that guards against spatial leakage between train and test. 
+(ii) We present a systematic evaluation of a two-stage DINOv2-based VPR pipeline on 
+this dataset, including ablations over the loss function (Triplet vs. Multi -Similarity), the 
+pooling strategy (patch-level GeM vs. CLS token), the backbone size (ViT-S/14 vs. ViT-
+B/14), and two criteria for LightGlue-based re-ranking (match count vs. a hybrid score). 
+(iii) We report and analyze a concrete negative result: on this dataset, LightGlue-based 
+re-ranking consistently degrades the output of the fine-tuned global descriptor, whether 
+applied uniformly or selectively to low-confidence queries. We identify three structural 
+causes grounded in the properties of the imagery and the pipeline, and we position this 
+finding as a domain-specific limitation of an otherwise well-established design pattern. 
+(iv) We show that the ViT -S/14 variant of DINOv2 re tains 94.5% of the R@1<100 m 
+performance of ViT-B/14 while using only 25.6% of the parameters and 34.3% of the 
+single-image inference time, and we argue that this configuration is a defensible default 
+for embedded and mobile deployment scenarios. 
+(v) We provide a detailed spatial and perceptual aliasing analysis that disentangles two 
+distinct error regimes — high-confidence aliasing on repetitive residential streets, and 
+long-tail errors driven by database sparsity — and we quantify their relative 
+contributions to overall error. 
+The remainder of this paper is organized as follows. Section 2 describes the dataset 
+and the train/database/query split protocol. Section 3 details the two -stage 
+methodology, including the DINOv2 backbone, the fine -tuning procedure, the GeM-
+pooled projection head, the Multi-Similarity Loss training, and the ALIKED + LightGlue 
+re-ranking stage. Section 4 presents the experimental results, including the main 
+comparison, the conditional re -ranking pipeline, the ViT -S vs. ViT-B comparison, the 
+confidence-rejection analysis, the computational cost, and the spatial and perceptual 
+aliasing analyses. Section 5 discusses the findings in the context of existing literature 
+and analyzes their probable causes. Section 6 concludes the paper with a summary of 
+contributions and directions for future work. 
+ 
+ 
+Literature Review 
+Visual place recognition and its close relative visual geo -localization have been 
+surveyed comprehensively  in (Lowry et al. 2015) . The field is typically organized 
+around two design axes: the representation used to describe each place, and the 
+matching strategy used to compare a query against the database. We briefly review 
+progress along each axis, with an emphasis on developments relevant to the present 
+study. 
+Early appearance-based approaches represented each place by a bag-of-words vector 
+over hand-crafted local descriptors such as SIFT or SURF, with perceptual aliasing 
+handled probabilistically (Cummins & Newman 2008) . The introduction of learnable 
+global descriptors, most notably NetVLAD (Arandjelovic et al. 2016), enabled end-to-
+end training from weakly supervised Street View tuples and produced substantial 
+accuracy gains across standard benchmarks. Subsequent developments along this 
+line include patch-level extensions that retain local spa tial information (Hausler et al. 
+2021) (Patch-NetVLAD), feature-mixing aggregators that replace VLAD with all -MLP 
+modules (Ali-Bey et al. 2023)  (MixVPR), and large-scale classification-based training 
+that avoids expensive mining  (Berton et al. 2022)   (CosPlace). Generalized Mean 
+(GeM) pooling (Radenović et al. 2018) provides a learnable trade-off between average 
+and max pooling over patch features and has become the dominant pooling choice for 
+transformer-based VPR models. 
+Local feature matching has followed a parallel trajectory, from hand -crafted detectors 
+and descriptors to learned keypoint–descriptor combinations such as ALIKED (Zhao et 
+al. 2023) and graph-neural-network-based matchers such as LightGlue (Lindenberger 
+et al. 2023) . In two -stage VPR, a global descriptor is used to retrieve the Top -N 
+candidates and a local matcher is then applied to re -rank them via geometric 
+verification (Hausler et al. 2021). This global-then-local pipeline has become a de facto 
+standard on benchmarks that exhibit strong viewpoint or appearance cha nge (Sattler 
+et al. 2018; Warburg et al. 2020) , under the assumption that local matching can filter 
+out candidates that are globally similar but geometrically inconsistent. 
+The most recent development relevant to this study is the emergence of visual 
+foundation models — large self-supervised vision models pre -trained on broad data 
+and adapted to a range of downstream tasks (Bommasani et al. 2021) . The Vision 
+Transformer architecture (Dosovitskiy et al. 2020)  provides the backbone for most of 
+these models, and DINOv2 (Oquab et al. 2023)  has recently been established as a 
+particularly strong self-supervised vision backbone, delivering competitive or state-of-
+the-art results across classification, segmentation, depth estimation, and retrieval. A 
+growing body of work shows that adapting DINOv2 to VPR via partial fine -tuning, 
+adapters, or lightweight projection heads yields strong performance on standard 
+benchmarks (Berton et al. 2022; Oquab et  al. 2023). However, the question of how 
+such adaptation behaves on small, architecturally homogeneous, non -Western cities 
+— the setting of interest here — has received comparatively little attention. 
+Alongside accuracy, practical VPR deployments are co nstrained by compute and 
+memory (Lowry et al. 2015), and a large body of work on parameter-efficient adaptation 
+has emerged to address these constraints, including Low -Rank Adaptation (Hu et al. 
+2022) and lightweight adapter modules. The trade-off between backbone capacity and 
+deployment feasibility — studied here through a direct comparison of the ViT-S/14 and 
+ViT-B/14 variants of DINOv2 — is therefore relevant both for production systems and 
+for reducing the computational footprint of ongoing research. A parallel concern is the 
+calibration of retrieval confidence, which remains poorly understood for deep models 
+(Guo et al. 2017) and has direct implications for safety-critical deployment. 
+ 
+ 
+Method 
+3.1. System Overview 
+This study proposes a two-stage Visual Place Recognition (VPR) system for the city center of Kırşehir, 
+Türkiye. The first stage is a retrieval module that extrac ts a global descriptor from a query image and 
+performs vector search to obtain candidate locations. In this stage, the self-supervised vision foundation 
+model DINOv2 (Oquab et al. 2023)  is used as the backbone and is fine -tuned under a metric learning 
+framework to capture the visual characteristics specific to Kırşehir. The second stage is designed to re-
+rank the Top -N candidates returned by the first stage using the local feature matcher LightGlue 
+(Lindenberger et al. 2023). An overview of the proposed pipeline is shown in Figure 1. 
+ 
+Figure 1. Overall pipeline of the proposed two-stage VPR system. Stage 1: DINOv2-based global descriptor 
+extraction followed by F AISS-based Top-K retrieval. Stage 2: Local feature matching-based re-ranking with 
+LightGlue. 
+3.2. Dataset 
+3.2.1. Data Collection 
+The dataset used in this study was constructed from the city center of Kırşehir using the Google Street 
+View API. During acquisition, the street network was sampled at approximately 50-meter intervals, and 
+at each sampled point four images were obtained corresponding to the four cardinal headings (North, 
+0°; East, 90°; South, 180°; West, 270°). Each image filename was structured to encode the geographic 
+coordinates (latitude and longitude) and the heading angle, yielding a directly retrievable location label 
+for every image. The resulting dataset covers 6,555 unique geographic points distributed across 654 
+distinct streets/avenues. The image resolution is fixed at 640 × 640 pixels. The spatial cove rage is 
+approximately 28.80 km² (6.10 km north–south and 4.72 km east–west). The geographic distribution of 
+the dataset is shown in Figure 2. 
+
+ 
+Figure 2. Geographic distribution of the Kırşehir VPR dataset. The left panel illustrates the grid-based train/test 
+split (train in blue, test in red); the right panel shows the per-street image density across the city. 
+3.2.2. Train/Test Split 
+To eliminate the data leakage risk commonly encountered in VPR studies, images were partitioned into 
+training and test sets using a geographic block-based (grid-based) scheme rather than random sampling. 
+Each image was assigned to a grid cell of 0.002° side length (approximately 222 m). Of the 444 resulting 
+grid blocks, 70% (310 blocks) were assigned to training and 30% (134 bl ocks) to testing. To ensure 
+reproducibility, the assignment was performed with a fixed random seed (seed = 42). This strategy 
+guarantees that the model is evaluated on geographic regions it has never seen during training. 
+Within the test set, a realistic VPR scenario was emulated by separating, at each coordinate point, the 
+last recorded heading as the query and the remaining headings as database (DB) entries. The model is 
+therefore required to retrieve a single -heading query against DB images taken at dif ferent headings of 
+the same location. Points with fewer than two images were excluded from evaluation. After these 
+operations, the final dataset consists of 18,140 training, 6,060 DB, and 2,020 query images. A summary 
+of dataset statistics is provided in Table 1. 
+Table 1. Summary statistics of the Kırşehir VPR dataset. 
+Property Value 
+Total number of images 26,220 
+Unique geographic points 6,555 
+Unique streets/avenues 654 
+Images per point (N/E/S/W) 4 
+Image resolution 640 × 640 pixels 
+North–south coverage 6.10 km 
+
+East–west coverage 4.72 km 
+Approximate covered area 28.80 km² 
+Grid cell size 0.002° (≈ 222 m) 
+Total grid blocks 444 
+Training blocks (70%) 310 
+Test blocks (30%) 134 
+Training images 18,140 
+Database (DB) images 6,060 
+Query images 2,020 
+ 
+3.3. DINOv2-Based Global Descriptor (Stage 1) 
+3.3.1. Backbone Model 
+Global visual descriptors in the first stage are extracted with DINOv2 [1], a self -supervised vision 
+foundation model pre-trained on large-scale curated image datasets, which is known to produce features 
+with strong transferability. The main model uses the  ViT-B/14 variant of DINOv2 (ViT-Base, 14 × 14 
+patch size). In addition, as part of the size –performance trade-off analysis, the ViT-S/14 variant (ViT-
+Small, 14 × 14) is trained under the same framework for comparison (see Section 3.6.3). 
+3.3.2. Feature Pooling and Projection Head 
+DINOv2 provides two standard representations: spatial patch tokens and a global classification (CLS) 
+token. Because spatial cues such as building facades, window alignments, and street perspective are 
+informative for VPR, the main model adopts Generalized Mean (GeM) pooling over the patch tokens 
+(Radenović et al. 2018) to preserve this spatial information. The GeM pooling operation is defined in 
+Equation (1): 
+f_GeM = ( (1/N) Σᵢ xᵢᵖ )^(1/p)          (1) 
+Here xᵢ denotes the activations of the patch tokens, N the number of patches, and p ≥ 1 a learnable 
+exponent. In this study p is initialized at 3 and updated jointly with the other network parameters during 
+training. 
+Following GeM pooling, the resulting embedding is mapped through a projection head to the final 512-
+dimensional descriptor. The projection head is a two-layer block consisting of Linear → BatchNorm → 
+ReLU → Linear. An L2-normalization is applied at the output, producing a descriptor directly usable 
+with cosine similarity-based search. 
+ 
+Figure 3. Block diagram of the proposed VPR-DINOv2 architecture. The last four Transformer blocks of the 
+DINOv2 backbone are unfrozen; patch tokens are aggregated via GeM pooling and passed through a two-layer 
+projection head to yield a 512-dimensional L2-normalized descriptor . 
+3.3.3. Partial Fine-Tuning 
+Fine-tuning all parameters of foundation models on a small dataset may lead to overfitting. To mitigate 
+this risk, a partial fine-tuning strategy is employed. Out of the 12 Transformer blocks in DINOv2 ViT-
+B/14, only the last four (blocks.8, 9, 10, 11) alo ng with the final normalization layer are unfrozen; all 
+remaining backbone parameters are kept frozen. The projection head is initialized from scratch and 
+trained end-to-end. This strategy preserves the general visual representational power of the backbone  
+while allowing the final layers to adapt to the local architectural characteristics of Kırşehir. In the main 
+model, 29,369,601 out of 87,566,337 total parameters (33.5%) are left trainable. 
+
+3.4. Metric Learning-Based Fine-Tuning 
+3.4.1. Retrieval Formulation 
+VPR is fundamentally a retrieval problem; thus, a metric learning formulation is adopted rather than 
+standard multi-class classification. The objective is to learn a discriminative embedding space in which 
+images from the same location are placed close together and images from different locations are placed 
+apart. In the training set, each unique coordinate point (point_id) is treated as a class, and labels are 
+transformed into integers via LabelEncoder. Under this formulation, every class in the trainin g set 
+contains exactly four examples (N/E/S/W headings). 
+3.4.2. MPerClassSampler 
+To enable heading -aware learning, MPerClassSampler (Musgrave et al. 2020)  is used instead of a 
+standard random sampler. This sampler guarantees that each training batch contains exactly m samples 
+from the same class (same coordinate point). In this study, m = 4 is chosen so that the four cardinal 
+headings of a given coordinate are forced into the same batch. This allows the metric learning loss to 
+directly assess the relationships between different headings of the same location. 
+3.4.3. Multi-Similarity Loss and Hard Negative Mining 
+The Multi-Similarity (MS) Loss (Wang et al. 2019) is used as the training objective. Unlike the classical 
+Triplet loss, MS Loss evaluates all pairs within a batch using similarity-aware weighting and emphasizes 
+the hardest positive and negative pairs. This property is crucial for the model to distinguish visually 
+similar but geographically distinct streets (the perceptual aliasing problem). The MS Loss parameters 
+are set to α = 2, β = 50, and base = 0.5; hard pair mining is performed with a MultiSimilarityMiner 
+whose ε parameter is set to 0.1. 
+3.4.4. Optimization and Training Protocol 
+Training is performed with differential learning rates: trainable parameters within the DINOv2 backbone 
+are updated with a learning rate of 1 × 10⁻⁵, whereas the randomly initialized projection head is updated 
+with 1 × 10⁻⁴. This choice aims to prevent catastrophic forgetting of the pre -trained representations in 
+the backbone. The Adam optimizer is used with a batch size of 32 and a total of 5 epochs. Input images 
+are resized to 518 × 518 pixels (a multiple of DINOv2's patch size of 14) and normalized using the 
+standard ImageNet mean and standard deviation. Data augmentation is restricted to color -based 
+ColorJitter (brightness = 0.3, contrast = 0.3, saturation = 0.3); geometric augmentations are deliberately 
+avoided because they would distort the geographic consistency critical to VPR. All hyperparameters are 
+summarized in Table 2. 
+Table 2. Hyperparameters used for DINOv2 fine-tuning. 
+Hyperparameter Value 
+Input image size 518 × 518 pixels 
+Output embedding dimension 512 
+Batch size 32 
+Number of epochs 5 
+Optimizer Adam 
+Learning rate (backbone) 1 × 10⁻⁵ 
+Learning rate (projection head) 1 × 10⁻⁴ 
+Loss function Multi-Similarity Loss 
+MS Loss parameters α = 2, β = 50, base = 0.5 
+Hard Negative Miner ε 0.1 
+MPerClassSampler m 4 (heading count) 
+Unfrozen Transformer blocks Last 4 blocks (8–11) + norm 
+Data augmentation ColorJitter (0.3 / 0.3 / 0.3) 
+Random seed 42 
+ 
+3.5. Vector Database and Global Retrieval 
+After fine -tuning, the model is switched to inference mode and used to generate 512 -dimensional 
+embeddings for all images in the DB and query sets. DB embeddings are L2 -normalized and indexed 
+using the IndexFlatIP structure from the Facebook AI Similarity Search (FAISS) library (Douze et al. 
+2025). Because L2-normalized vectors yield an inner product equal to the cosine similarity, this indexing 
+choice enables cosine-based search with constant-cost inner-product computation. For each query, the 
+K nearest candidates are retrieved with a single dot-product search. 
+3.6. Comparative Experimental Framework 
+To isolate the contribution of the main model and quantify the effect of individual architectural choices, 
+additional experiments are organized under four themes. All of  these experiments use the same data 
+split, the same random seed, and the same evaluation set as the main model. 
+3.6.1. Baseline: Frozen DINOv2 
+To quantify the contribution of fine-tuning, a baseline model is constructed in which all parameters of 
+the DINO v2 backbone are frozen and only the projection head is trained. This baseline uses GeM 
+pooling, MS Loss, and identical training conditions to the main model. It therefore measures the 
+performance attainable with off -the-shelf DINOv2 representations without  any adaptation to the 
+Kırşehir dataset. 
+3.6.2. Ablation Studies 
+Two core design decisions of the main model — the pooling strategy and the loss function — are 
+examined through ablations. 
+CLS token vs. GeM pooling: A variant is trained in which the CLS token of DINOv2 is used directly 
+in place of GeM pooling. The GeM module is disabled while all other components (projection head, 
+loss, optimizer) are held identical to the main model, thereby isolating the effect of spatial patch 
+information against a global CLS summary for the VPR task. 
+Triplet Loss vs. Multi -Similarity Loss: A variant is trained in which MS Loss is replaced by the 
+classical Triplet Margin Loss (Schroff et al. 2015) . A Triplet Margin Miner (margin = 0.2, 
+type_of_triplets = "hard") is used for hard triplet mining; all other components are held identical to the 
+main model. 
+3.6.3. DINOv2 V ariant Comparison: ViT-S/14 vs. ViT-B/14 
+To examine the size–performance trade-off, which is of practical relevance for deployment, the DINOv2 
+ViT-S/14 variant (ViT-Small, 384-dimensional backbone embedding, ≈ 22M parameters) is fine-tuned 
+from scratch using the same protocol. In this model the last four blocks of the backbone are unfrozen, 
+and the projection head maps the 384 -dimensional backbone output to the shared 512 -dimensional 
+representation space. The size–speed–accuracy comparison additionally reports single-image inference 
+time and on-disk model size. 
+3.6.4. Confidence-Based Rejection 
+The ability of a system to abstai n when uncertain is valuable in practical deployments. To this end, a 
+rejection mechanism based on the DINOv2 Top-1 cosine similarity score is introduced. A threshold θ is 
+swept over [0.60, 0.95] with steps of 0.01; for each θ, (i) the coverage (fraction of accepted queries), (ii) 
+the localization error computed only over accepted queries, and (iii) the Recall@K metrics are reported. 
+This analysis also quantifies whether the cosine similarity score is a suitable signal for confidence 
+calibration. 
+3.7. LightGlue-Based Local Feature Re-Ranking (Stage 2) 
+3.7.1. Local Feature Extraction and Matching 
+The second stage re -ranks the Top -N candidates from the first stage using local feature matching. 
+ALIKED (Zhao et al. 2023) is used as the local keypoint extractor, and LightGlue (Lindenberger et al. 
+2023) is used as the matcher. ALIKED is an efficient learned keypoint extractor based on deformable 
+convolutions; LightGlue is a graph neural network-based matcher that incorporates an adaptive stopping 
+mechanism for runtime efficiency. For each image, at most 1,024 keypoints are extracted. 
+3.7.2. Ranking Criteria 
+To assess whether the number of matches alone is a sufficient ranking criterion at the output of 
+LightGlue, two criteria are compared: 
+Match Count: Ranking based solely on the number of mutually matched keypoints. 
+Hybrid Score: A score defined by the product of the match count and the mean match confidence 
+(matching score): score = num_matches × (1 + avg_confidence). This formulation reduces the advantage 
+gained by candidates with many but low-confidence matches. 
+3.7.3. Conditional Two-Stage Pipeline 
+Local feature re-ranking carries a high computational cost. Applying LightGlue to all Top-N candidates 
+for every query is undesirable in practical deployment scenarios. Therefore, a conditional (adaptive) 
+two-stage pipeline is proposed: if the DINOv2 Top-1 cosine similarity score is greater than or equal to 
+a threshold θ, the DINOv2 Top-1 prediction is accepted directly; otherwise, the Top -20 candidates are 
+re-ranked with LightGlue and the new Top -1 is returned. Six threshold values (0.70, 0.75, 0.78, 0.80, 
+0.82, 0.85) are tested in the range [0.70, 0.85]. A reference condition in which LightGlue is applied 
+uniformly to all queries (no threshold) is also reported for comparison. 
+3.8. Evaluation Metrics 
+System performance is reported in four groups of metrics: 
+Street-name accuracy: The fraction of queries whose Top -1 result matches the ground -truth street 
+label. It is used as a semantic, label-level measure of correctness. 
+GPS localization error: The Haversine great-circle distance between the query coordinate and the Top-
+1 prediction coordinate, as defined in Equation (2). Both the median and the mean are reported. 
+d = 2R · arcsin( √( sin²(Δφ/2) + cos φ₁ · cos φ₂ · sin²(Δλ/2) ) )          (2) 
+Here R is the Earth's radius (6,371,000 m), φ and λ denote latitude and longitude respectively, and Δφ 
+and Δλ denote their differences between query and prediction. 
+Threshold-based recall (Recall@1 at threshold): The fraction of queries whose Top-1 prediction error 
+falls below a set of standard thresholds (25 m, 50 m, 100 m, 500 m). This is the standard evaluation 
+metric in VPR literature. 
+Inference time: As part of the computational cost analysis, single-image DINOv2 embedding time, per-
+query FAISS search time, and LightGlue re-ranking time (for 20 candidates) are measured separately. 
+3.9. Experimental Environment 
+All experiments are conducted in Google Colab on an NVIDIA L4 GPU (23.7 GB VRAM). The software 
+stack consists of PyTorch (DINOv2 is loaded via torch.hub), pytorch-metric-learning (Multi-Similarity 
+and Triplet losses, MPerClassSampler), FAISS -CPU (vector search), the official LightGlue and 
+ALIKED impl ementations, scikit -learn (LabelEncoder), and folium (geographic visualization). For 
+reproducibility, the random seeds of Python, NumPy, and PyTorch are fixed at 42. 
+ 
+ 
+Result 
+4.1. Overview 
+This section reports the experimental outcomes obtained on the Kırşehir VPR 
+dataset, which comprises 18,140 training, 6,060 database, and 2,020 query images. 
+Results are organized in five subsections. Section 4.2 presents the main comparison 
+among the frozen baseline, the two ablation variants, the proposed main model, and 
+two LightGlue re-ranking variants. Section 4.3 reports the conditional re-ranking 
+pipeline. Section 4.4 compares the ViT-S/14 and ViT-B/14 variants of DINOv2 under 
+the size–performance trade-off. Section 4.5 presents the confidence-based rejection 
+analysis. Section 4.6 reports the computational cost of each stage, and Section 4.7 
+provides the error and perceptual aliasing analyses. 
+4.2. Main Comparison and Ablation Results 
+Table 3 summarizes the performance of all evaluated methods on the identical query 
+set. Several patterns emerge from these results. First, fine-tuning a subset of DINOv2 
+parameters on the Kırşehir dataset yields a substantial improvement over the frozen 
+baseline. The main model reaches 74.70% street-name accuracy and an 8.2 m 
+median localization error, compared to 56.14% and 49.8 m obtained by the frozen 
+variant. The relative improvement is particularly pronounced at tighter recall 
+thresholds: R@1 <25 m rises from 39.01% to 61.73%, indicating that fine-tuning is 
+essential for obtaining near-metric localization accuracy. Second, the two ablation 
+variants remain competitive but exhibit distinct trade-offs. Replacing MS Loss with the 
+classical Triplet Loss degrades performance across all metrics (median error 
+increases from 8.2 m to 12.3 m, R@1 <100 m decreases from 81.24% to 78.02%), 
+which is consistent with the known advantage of multi-pair weighting over single-
+triplet supervision in fine-grained retrieval (Wang et al., 2019). Third, and more 
+unexpectedly, the CLS-token variant slightly outperforms the GeM-pooling main 
+model (76.58% vs. 74.70% street accuracy; 5.3 m vs. 8.2 m median error). This 
+result deviates from the prevailing assumption in the VPR literature that spatially 
+pooled patch tokens carry more discriminative information than global class tokens, 
+and is further discussed in Section 5. 
+In contrast, the LightGlue re-ranking stage does not improve upon the Stage-1 output 
+when applied uniformly to all queries. Both the match-count and hybrid-score ranking 
+criteria lead to a pronounced drop in performance: street-name accuracy falls from 
+74.70% to 48.32–49.41%, median error grows from 8.2 m to 60.4–64.8 m, and R@1 
+<100 m drops from 81.24% to 56.78–58.17%. This outcome, although contrary to the 
+typical global-then-local VPR design (Hausler et al. 2021), is consistent across both 
+ranking criteria and is stable throughout the full test set of 2,020 queries. A more 
+detailed analysis of this phenomenon is presented through the conditional pipeline 
+results in Section 4.3. 
+Table 3. Main comparison of evaluated methods on the 2,020-query test set. 
+Method 
+Street 
+Acc. 
+(%) 
+Median 
+Err. 
+(m) 
+R@1 
+<25 
+m 
+R@1 
+<50 
+m 
+R@1 
+<100 
+m 
+R@1 
+<500 
+m 
+Notes 
+Frozen DINOv2 (head 
+only) 56.14 49.8 39.01 52.23 64.11 81.34 Baseline 
+DINOv2 + Triplet Loss 71.04 12.3 58.32 68.71 78.02 90.35 Ablation 
+(loss) 
+DINOv2 + CLS token 76.58 5.3 64.90 75.89 83.71 91.73 Ablation 
+(pooling) 
+DINOv2 + GeM + MS 
+Loss (main) 74.70 8.2 61.73 71.88 81.24 91.39 Main 
+model 
++ LightGlue (Match 
+Count) 48.32 64.8 31.29 44.95 56.78 76.53 Re-rank 
+(all) 
++ LightGlue (Hybrid 
+Score) 49.41 60.4 32.33 46.24 58.17 77.13 Re-rank 
+(all) 
+ 
+ 
+Figure 4. Cumulative distribution functions (CDFs) of Top-1 localization errors. Left: 
+comparison across all methods, showing the clear advantage of fine-tuned variants 
+over the frozen baseline and the underperformance of uniform LightGlue re-ranking. 
+Right: comparison between Top-1 retrieval and Top-5 Spatial Voting applied to the 
+main model. Spatial Voting systematically degrades the result, indicating that the 
+ranks beyond Top-1 are not sufficiently reliable to support coordinate averaging. 
+4.3. Conditional Two-Stage Pipeline 
+Given the negative effect of uniform LightGlue re-ranking reported in Section 4.2, we 
+investigate whether re-ranking can be applied selectively to low-confidence queries 
+only. Table 4 reports the conditional pipeline for six threshold values θ ∈ (0.70, 0.75, 
+0.78, 0.80, 0.82, 0.85). For each θ, queries with a DINOv2 Top-1 cosine similarity 
+score ≥ θ are accepted directly, and the remaining queries are re-ranked with 
+LightGlue over the Top-20 candidates. The proportion of queries subjected to 
+LightGlue grows from 0.9% (19/2,020) at θ = 0.70 to 53.8% (1,087/2,020) at θ = 0.85. 
+
+Across all tested thresholds, the conditional pipeline yields either a marginal or a 
+larger decrease in performance relative to DINOv2-only. At θ = 0.70, where fewer 
+than 1% of queries are re-ranked, the outcome is almost identical to the baseline 
+(81.09% vs. 81.24% R@1 <100 m; −0.15 percentage points). As θ increases and 
+more queries are routed to LightGlue, performance degrades monotonically, reaching 
+66.83% R@1 <100 m at θ = 0.85 — a 14.4 percentage-point reduction relative to the 
+main model. Median localization error exhibits the same monotonic trend (8.2 m → 
+36.8 m). These results imply that, on this dataset, LightGlue-based re-ranking is 
+harmful to the output of the first stage irrespective of whether it is applied to high- or 
+low-confidence queries. In other words, the local geometric cues captured by ALIKED 
++ LightGlue on Google Street View imagery cannot improve upon the global semantic 
+representation produced by the fine-tuned DINOv2 model. Potential causes for this 
+behavior are discussed in Section 5. 
+Table 4. Conditional pipeline results. θ is the DINOv2 Top-1 cosine similarity 
+threshold; queries with scores below θ are re-ranked with LightGlue. The first row 
+corresponds to DINOv2-only without any re-ranking. 
+θ DINOv2 
+kept 
+LG 
+applied LG % Street 
+Acc. (%) 
+Median 
+Err. (m) 
+R@1 
+<25 m 
+R@1 
+<100 
+m 
+R@1 
+<500 m 
+— 2020 0 0.0 74.70 8.2 61.68 81.24 91.39 
+0.70 2001 19 0.9 74.50 8.5 61.58 81.09 91.34 
+0.75 1919 101 5.0 73.32 9.8 60.54 80.15 90.30 
+0.78 1786 234 11.6 71.63 11.2 58.56 78.07 88.76 
+0.80 1626 394 19.5 69.36 14.6 56.14 75.69 87.28 
+0.82 1413 607 30.0 66.49 19.2 53.17 72.72 85.59 
+0.85 933 1087 53.8 59.80 36.8 45.30 66.83 81.83 
+ 
+ 
+Figure 5. Conditional pipeline analysis. Left: the CDFs of DINOv2-only and the best 
+conditional configuration (θ = 0.70) are nearly indistinguishable, confirming that 
+
+limited LightGlue intervention cannot improve the baseline. Right: monotonic 
+degradation of R@1 <100 m as the fraction of queries routed to LightGlue increases. 
+4.4. DINOv2 Variant Comparison: ViT-S/14 vs. ViT-B/14 
+Table 5 summarizes the comparison between the ViT-S/14 and ViT-B/14 variants of 
+DINOv2 under the identical fine-tuning protocol. The ViT-S/14 model contains 
+22,402,305 parameters and occupies 85.5 MB on disk, corresponding to 25.6% of 
+the parameter count and 25.6% of the storage footprint of the ViT-B/14 model. With 
+this reduced capacity, the ViT-S/14 variant achieves 69.80% street-name accuracy, a 
+13.2 m median error, and 76.73% R@1 <100 m. Relative to the ViT-B/14 main model 
+(74.70% / 8.2 m / 81.24%), the smaller backbone recovers 94.5% of the R@1 <100 
+m performance while reducing the median single-image inference time from 37.6 ms 
+to 12.9 ms on the NVIDIA L4 GPU — a 2.9× speed-up. This trade-off is particularly 
+relevant for deployment scenarios in which memory or real-time latency budgets are 
+constrained. 
+Table 5. Comparison of DINOv2 ViT-S/14 and ViT-B/14 under the identical fine-tuning 
+protocol. 
+Metric ViT-S/14 ViT-B/14 
+Backbone architecture ViT-Small (384-dim) ViT-Base (768-dim) 
+Total parameters 22,402,305 87,566,337 
+On-disk model size 85.5 MB 334.1 MB 
+Single-image inference (median) 12.9 ms 37.6 ms 
+Street-name accuracy (%) 69.80 74.70 
+Median localization error (m) 13.2 8.2 
+Mean localization error (m) 229.6 179.6 
+R@1 <25 m (%) 56.83 61.68 
+R@1 <50 m (%) 67.77 71.78 
+R@1 <100 m (%) 76.73 81.24 
+R@1 <500 m (%) 88.76 91.39 
+ 
+ 
+
+Figure 6. DINOv2 variant comparison. Left: CDF of Top-1 localization errors. Center: 
+per-metric bar comparison. Right: size–performance scatter, in which the ViT-S/14 
+model preserves 94.5% of the ViT-B/14 performance (R@1 <100 m) while using 
+25.6% of the parameters. 
+4.5. Confidence-Based Rejection 
+The confidence-based rejection analysis sweeps the DINOv2 Top-1 cosine similarity 
+threshold θ across the interval [0.60, 0.95]. The observed score distribution for the 
+2,020 queries is tightly concentrated in [0.65, 0.95] (Figure 7, right), with no query 
+scoring below 0.66. As a result, thresholds θ ≤ 0.60 retain 100% coverage and yield 
+the baseline metrics of the main model (74.70% street accuracy, 8.2 m median error, 
+81.24% R@1 <100 m). Increasing θ beyond 0.70 progressively reduces coverage; 
+however, the corresponding gain in accuracy among accepted queries is negligible. 
+The accuracy–coverage trade-off curve (Figure 7, left) is essentially flat across the 
+entire coverage range between approximately 20% and 100%, with R@1 <100 m 
+remaining within a 3–5 percentage-point band. The median error curve (Figure 7, 
+middle) likewise remains near the baseline value of 8 m up to θ ≈ 0.93 and only rises 
+when fewer than ∼10% of queries are accepted. Quantitatively, the automatically 
+selected operating point — chosen by maximizing the harmonic mean of coverage 
+and R@1 <100 m — coincides with θ = 0.60 at full coverage, indicating that no 
+confidence threshold improves upon accepting all queries. 
+This result suggests that the cosine similarity between the query descriptor and its 
+nearest database neighbor is not a well-calibrated confidence signal for the fine-
+tuned DINOv2 model on this dataset. The distribution of scores is narrow and largely 
+overlaps between correct and incorrect predictions (see the score-distribution 
+analysis in Section 4.7), which limits the usefulness of score-based rejection. 
+Calibration-aware confidence estimation is therefore identified as a direction for 
+future work. 
+ 
+Figure 7. Confidence-based rejection analysis. Left: accuracy–coverage trade-off 
+showing that recall is essentially flat across a wide range of coverage values. Middle: 
+median and mean localization errors remain close to the baseline up to θ ≈ 0.93. 
+Right: the DINOv2 Top-1 score distribution is concentrated in [0.65, 0.95], leaving 
+very few queries available for rejection at low thresholds. 
+4.6. Computational Cost 
+
+All runtime measurements were obtained on a single NVIDIA L4 GPU (23.7 GB 
+VRAM) within the Google Colab environment. Table 6 summarizes the per-stage 
+computational costs. For a single query, Stage 1 (DINOv2 embedding followed by 
+FAISS Top-K search over 6,060 database vectors) takes approximately 36 ms with 
+ViT-B/14 and about 13 ms with ViT-S/14. The FAISS search component itself 
+contributes negligibly (0.064 ms per query), so the overall Stage-1 latency is 
+dominated by the DINOv2 forward pass. 
+In contrast, a full Stage-2 pass — LightGlue re-ranking over 20 candidates — 
+requires 0.38 s on average per query, roughly an order of magnitude more than 
+Stage 1. Database preparation (embedding extraction for 6,060 images) takes 
+approximately 4 min 24 s with ViT-B/14 and is a one-time offline cost. Considering 
+that Stage-2 re-ranking did not improve recall on this dataset (Sections 4.2–4.3), 
+these measurements provide a useful quantitative argument for preferring a Stage-1-
+only deployment. 
+Table 6. Per-stage computational cost on an NVIDIA L4 GPU. 
+Stage / Operation Time 
+Stage 1 — DINOv2 embedding (single image, ViT-
+B/14) 35.9 ms (median) 
+Stage 1 — DINOv2 embedding (single image, ViT-
+S/14) 12.9 ms (median) 
+Stage 1 — DB embedding extraction (6,060 images, 
+ViT-B/14) 263.6 s 
+Stage 1 — FAISS search (single query, Top-10) 0.064 ms 
+Stage 1 — Total pipeline (single query) ≈ 36 ms 
+Stage 2 — LightGlue re-ranking (20 candidates, single 
+query) 0.38 s (avg.) 
+ 
+4.7. Error and Perceptual Aliasing Analysis 
+4.7.1. Error Distribution 
+The distribution of Top-1 localization errors for the main model is highly skewed: of 
+the 2,020 queries, 1,207 (59.8%) have errors below 25 m, an additional 204 (10.1%) 
+fall between 25 and 50 m, 191 (9.5%) between 50 and 100 m, 134 (6.6%) between 
+100 and 250 m, 71 (3.5%) between 250 and 500 m, and 174 (8.6%) exceed 500 m. 
+The median error (8.2 m) therefore lies well below the mean (179.6 m), indicating a 
+small but heavy-tailed subset of queries that are mislocalized by hundreds of meters. 
+Among the 2,020 queries, 1,509 (74.7%) receive the correct street label as the Top-1 
+result and 511 (25.3%) do not. Figure 8 shows the error histogram together with the 
+spatial distribution of correct and incorrect predictions across the city. 
+ 
+Figure 8. Error distribution of the main model. Left: histogram of Top-1 localization 
+errors with a median of 8 m and a heavy right tail. Right: spatial distribution of correct 
+(green) and incorrect (red) street predictions over the Kırşehir road network. 
+4.7.2. Per-Street Patterns 
+The per-street error analysis reveals a clear relationship between database density 
+and localization accuracy. Streets with the lowest median errors (≤ 10 m) are those 
+with high database coverage, such as 1090. Sokak (n = 30, 87% street-correct, 
+median 8 m), Mustafa Kemal Paşa Caddesi (n = 9, 100% correct, 8 m), and Şehit 
+Sahir Kurutluoğlu Caddesi (n = 24, 88% correct, 9 m). Conversely, the largest errors 
+appear on streets represented by only one or a few query points — for example 
+1731. Sokak (n = 1, 3,982 m), 1396. Sokak (n = 1, 3,392 m), and Şehit Turgut 
+İlanbey Caddesi (n = 1, 2,640 m). This pattern indicates that the model's performance 
+is substantially more reliable on streets with denser database representation, 
+whereas isolated, sparsely sampled points in the test blocks are at risk of being 
+matched to visually similar streets far away. 
+A scatter plot of retrieval confidence versus error (Figure 9, left) further reveals that 
+high cosine similarity scores do not guarantee small localization errors: a 
+considerable fraction of queries with scores in the 0.85–0.95 range are nevertheless 
+mislocalized by hundreds of meters. This observation motivates the perceptual 
+aliasing analysis in the next subsection. 
+
+ 
+Figure 9. Relation between retrieval confidence and error (left) and per-street error 
+distribution for the 15 streets with the most query examples (right). 
+4.7.3. Perceptual Aliasing 
+Perceptual aliasing is operationalized here as cases in which a query receives a Top-
+1 cosine similarity score in the upper quartile (> 0.877) but is nevertheless assigned 
+to an incorrect street. Among the 511 incorrect predictions produced by the main 
+model, 83 (16.2%) fall into this high-confidence subset. These high-confidence errors 
+exhibit a median localization error of 59 m, substantially lower than the 258 m median 
+of the low-confidence errors. In other words, perceptual aliasing produces a small but 
+reliably near-miss category of confident misidentifications rather than gross 
+mislocalizations. 
+The streets most affected by perceptual aliasing are predominantly narrow residential 
+streets with repetitive building facades: 417. Sokak (3/4 queries, 75%), 452. Sokak 
+(3/8, 38%), İkizarası Caddesi (3/8, 38%), 418. Sokak (3/9, 33%) and 720. Sokak 
+(4/15, 27%). The most frequent confusion pairs (e.g., 603. Sokak → 606. Sokak, 283. 
+Sokak → 282. Sokak, 418./417. Sokak → 452. Sokak) involve adjacent or nearby 
+streets within the same residential block, which supports the interpretation that 
+perceptual aliasing is primarily driven by locally homogeneous architectural styles 
+rather than distant coincidences. Retrieval diversity analysis corroborates this view: 
+within the Top-10 results, the median number of distinct streets is 3, 12.0% of queries 
+return a single consistent street, and 27.0% return five or more different streets, 
+reflecting the proportion of queries for which the model is unable to narrow down to a 
+single place confidently. 
+Finally, the score distribution of correct versus incorrect predictions overlaps 
+substantially across the range [0.75, 0.95] (Figure 10, left). Although the incorrect-
+prediction distribution is slightly shifted toward lower scores, the two distributions are 
+not separable by a single threshold, which is the underlying reason that confidence-
+based rejection (Section 4.5) produces no accuracy gains. 
+
+ 
+Figure 10. Perceptual aliasing analysis. Left: overlapping score distributions of 
+correct and incorrect predictions. Middle: number of distinct streets appearing in the 
+Top-10 results. Right: spatial concentration of high-confidence incorrect predictions in 
+the central and southeastern residential areas of the city. 
+Discussion 
+5.1. Summary of Key Findings 
+The experimental evidence presented in Section 4 yields four principal findings that 
+collectively shape the discussion of this study. First, partial fine-tuning of DINOv2 is 
+highly effective: the main model achieves 81.24% Recall@1 at 100 m and an 8.2 m 
+median localization error, improving upon the frozen baseline by 17.13 percentage 
+points at the 100 m threshold and reducing the median error by a factor of six. 
+Second, two architectural choices commonly considered critical for retrieval — patch-
+level GeM pooling and Multi-Similarity Loss — deliver competitive but not strictly 
+dominant performance on this dataset: Multi-Similarity Loss outperforms Triplet Loss 
+as expected (Wang et al. 2019), whereas, unexpectedly, the CLS-token variant 
+slightly surpasses the GeM-pooled main model. Third, the two-stage pipeline with 
+LightGlue-based re-ranking degrades performance in every configuration tested, 
+whether applied uniformly or only to low-confidence queries. Fourth, the ViT-S/14 
+variant retains 94.5% of the ViT-B/14 R@1<100 m performance while using only 
+25.6% of its parameters and 34.3% of its inference time. The discussion below 
+situates each of these findings within the literature and analyzes their probable 
+causes and implications. 
+5.2. Why Does Partial Fine-Tuning Help So Much on This Dataset? 
+The large gap between the frozen DINOv2 baseline (56.14% street accuracy, 49.8 m 
+median error) and the fine-tuned main model (74.70% street accuracy, 8.2 m median 
+error) is considerably larger than gaps commonly reported on widely used VPR 
+benchmarks such as Pittsburgh30k or Tokyo24/7 (Berton et al. 2022). We attribute 
+this to the specific visual regime of the Kırşehir dataset. Kırşehir is a mid-sized 
+Anatolian city dominated by repetitive low-to-mid-rise residential buildings, narrow 
+side streets, and a relatively homogeneous architectural vocabulary. DINOv2 is pre-
+trained on a large and diverse corpus biased toward Western, English-speaking 
+contexts (Oquab et al. 2023); as a consequence, its off-the-shelf features are 
+
+descriptive but under-specialized for the fine-grained distinctions required in a small, 
+architecturally uniform city. Unfreezing the last four Transformer blocks allows the 
+model to remap its high-level visual tokens toward the architectural, material, and 
+vegetation cues that separate Kırşehir streets, while leaving the lower-level 
+representations intact. This interpretation is consistent with the general finding that 
+parameter-efficient adaptation of foundation models to domain-shifted data is 
+essential for strong downstream performance (Berton et al. 2022; Oquab et al. 2023). 
+5.3. CLS Token vs. GeM Pooling: An Unexpected Ablation Outcome 
+The prevailing assumption in the VPR literature is that spatially pooled patch tokens 
+preserve more discriminative information than a single global CLS token (Hausler et 
+al. 2021; Radenović et al. 2018). Our results partially contradict this expectation: the 
+CLS-token variant achieves 76.58% street accuracy and 5.3 m median error against 
+74.70% and 8.2 m for the GeM-pooled main model. The gap, while small, is 
+consistent across all Recall@K thresholds (Table 3), so it is unlikely to be an artefact 
+of a single metric. 
+Several plausible factors explain this pattern. First, DINOv2 is explicitly trained with a 
+discriminative self-supervised objective (DINO-style self-distillation combined with 
+iBOT masked-image modeling) that produces a CLS token already well-positioned in 
+the representational space (Oquab et al. 2023); in other transformer encoders without 
+such training, the CLS token is often weaker than pooled patch features, but in 
+DINOv2 it is a strong global descriptor in its own right. Second, the Kırşehir dataset 
+exhibits limited intra-street spatial variation: within a single street segment at four 
+cardinal headings, the patch-level statistics change substantially (e.g., one facade 
+per image), while the semantic content (residential apartment blocks of similar style) 
+remains consistent. A GeM-pooled representation may therefore absorb more 
+heading-specific variance than is useful for cross-heading matching, whereas the 
+CLS token provides a more heading-invariant summary. Third, our training schedule 
+is short (5 epochs) and the patch-token GeM exponent is a learnable parameter; 
+longer training may allow GeM to surpass CLS, but we did not observe clear signs of 
+underfitting in the training loss, which plateaued after the third epoch. These 
+observations suggest that the default choice of GeM pooling for DINOv2-based VPR 
+should not be assumed to be strictly optimal, particularly on small, architecturally 
+homogeneous cities; ablations against CLS pooling deserve routine inclusion in 
+future studies. 
+5.4. Why Does LightGlue-Based Re-Ranking Degrade Performance? 
+The most striking negative result in this study is that LightGlue-based re-ranking 
+harms performance in all configurations tested. Uniform re-ranking across the Top-20 
+candidates reduces street accuracy from 74.70% to 48.32–49.41%, and the 
+conditional pipeline produces a monotonic degradation as the fraction of LightGlue-
+processed queries grows (Table 4). This outcome contrasts sharply with the well-
+documented advantages of two-stage global-then-local pipelines on standard VPR 
+benchmarks (Hausler et al. 2021; Lindenberger et al. 2023), and therefore requires 
+careful examination. 
+We identify three likely, non-mutually-exclusive causes. The first concerns the 
+imagery itself. Google Street View images are produced by a multi-camera rig and 
+are stitched from multiple physical sensors (Anguelov et al. 2010); they are 
+geometrically re-projected and subjected to automatic white-balance and exposure 
+normalization that differ across capture sessions. Local keypoint detectors such as 
+ALIKED (Zhao et al. 2023) are sensitive to consistent local texture, and stitching 
+seams, rolling-shutter artefacts, and automatic post-processing can introduce 
+spurious keypoints. Once such keypoints dominate an image, they tend to match 
+among themselves and produce high match counts that do not reflect the actual 
+scene geometry. 
+The second concerns the content of Kırşehir street scenes. A large fraction of the 
+dataset shows plastered apartment facades, uniform sidewalks, standardized road 
+surfaces, commercial signage, and repetitive window grids. These structures are, by 
+construction, textures that are locally self-similar, which is exactly the regime in which 
+local keypoint matchers are known to produce confident but wrong matches (Sattler 
+et al. 2018). In this regime, the number of matches between a query and a non-
+matching candidate (e.g., a similarly styled apartment on a different street) can 
+exceed the number of matches to the correct place if the correct place happens to be 
+viewed from a different heading and therefore shares fewer directly comparable local 
+features. 
+The third concerns the structure of the Top-N pool. On large benchmarks, Stage-1 
+retrieval typically returns several visually distinct candidates in its Top-N, among 
+which the correct one can be isolated by geometric verification. On Kırşehir, the first-
+stage output is already tightly tuned to the target (81.24% R@1 at 100 m), and the 
+remaining 18.76% of Top-1 errors involve candidates that are either visually 
+indistinguishable from the query (perceptual aliasing cases; Section 4.7.3) or located 
+in under-sampled regions of the database. In both cases, local feature matching 
+cannot recover the correct place because the information needed is not present in 
+the geometry. Under these conditions, LightGlue's ranking based on match counts 
+effectively re-randomizes a near-optimal ordering, which explains the consistent 
+performance drop. Our hybrid-score variant — which reduces the advantage of low-
+confidence matches — partially mitigates but does not reverse the effect (Table 3). 
+Taken together, these observations do not imply that two-stage pipelines are 
+inherently inappropriate for VPR, but rather that local geometric verification is most 
+useful when Stage-1 retrieval is weaker than Stage-2 geometric reasoning. On this 
+dataset, the opposite holds: the fine-tuned DINOv2 descriptor is stronger than the 
+ALIKED+LightGlue evidence it could be re-ranked with. This finding aligns with 
+recent work showing that for sufficiently well-adapted global descriptors, simpler 
+single-stage pipelines can outperform heavier re-ranking schemes in practical 
+deployments (Ali-Bey et al. 2023). 
+5.5. Cosine Similarity Is Not a Usable Confidence Signal Here 
+The confidence-based rejection analysis in Section 4.5 shows that sweeping the Top-
+1 cosine similarity threshold across [0.60, 0.95] does not produce a coverage range 
+in which rejected queries are systematically worse than accepted ones. The 
+accuracy–coverage curve is nearly flat and the automatically selected operating point 
+coincides with accepting all queries. The underlying reason is visible in the score 
+distributions (Section 4.7.3): the DINOv2 scores of correctly and incorrectly localized 
+queries overlap heavily between 0.75 and 0.95, with only a modest shift in their 
+means. 
+This behavior is a symptom of the broader problem of confidence calibration in deep 
+retrieval models. Cosine similarity is a convenient proxy for similarity but is not a well-
+calibrated posterior probability, and this discrepancy is known to persist after 
+standard metric-learning fine-tuning (Guo et al., 2017). For safety-critical 
+deployments — such as autonomous navigation or emergency response — a more 
+principled confidence estimator is necessary. Candidate approaches include 
+geometric verification applied selectively to high-risk queries, ensemble disagreement 
+across multiple descriptor heads, and explicit calibration via temperature scaling or 
+conformal prediction. None of these were evaluated in the present study and they 
+constitute a natural next step. 
+5.6. Size–Performance Trade-off: The Case for ViT-S/14 
+The comparison between ViT-S/14 and ViT-B/14 (Table 5) is arguably the most 
+practically important result of this study. ViT-S/14 retains 94.5% of the R@1<100 m 
+performance of ViT-B/14 while using 25.6% of the parameters and 34.3% of the 
+single-image inference time on identical hardware. For deployment on embedded 
+systems, in-vehicle compute units, or mobile devices — all of which are the canonical 
+target platforms for VPR (Lowry et al. 2015) — this trade-off is highly favorable. The 
+observation is also consistent with the broader finding in representation learning that, 
+for moderately sized downstream datasets, the marginal return of scaling backbone 
+capacity diminishes quickly once the pre-training is strong (Oquab et al. 2023). 
+From a methodological standpoint, this result also has implications for research 
+practice. Many recent VPR papers adopt the largest available DINOv2 variant by 
+default; our results suggest that ViT-S/14 can serve as a viable proxy during 
+development and ablation studies, substantially reducing compute requirements and 
+iteration time without qualitatively changing the conclusions. The dominant failure 
+modes observed on ViT-S/14 (perceptual aliasing in residential streets, sparse-
+sampling errors in the tail) are the same as those of ViT-B/14; the smaller model does 
+not introduce new error categories, only amplifies existing ones. 
+5.7. Perceptual Aliasing and Dataset Sparsity 
+Two distinct error regimes emerge from the error analysis in Section 4.7. The first is 
+perceptual aliasing, defined here as high-confidence (upper-quartile score) 
+misclassifications. This regime accounts for 16.2% of errors, and these errors are 
+geographically concentrated on narrow residential streets with repetitive facades 
+(e.g., 417. Sokak with 75% aliasing rate, 452. Sokak with 38%). Such aliasing is a 
+well-documented failure mode of appearance-based place recognition (Cummins & 
+Newman 2008; Sattler et al. 2018), and its prevalence here reflects a real property of 
+the city rather than a methodological weakness. 
+The second regime, which accounts for the long right tail of the error distribution, is 
+database sparsity. Streets that are represented in the test query set by a single query 
+point (e.g., 1731. Sokak with n = 1 and a 3,982 m error) also have sparse database 
+coverage, so no nearby candidates are available for retrieval. This is an artefact of 
+the grid-based train/test split: when a geographic block falls entirely into the test side, 
+the queries inside that block may have no geographically adjacent anchors in the 
+database. A finer-grained split (e.g., 100 m grids instead of 222 m) or a balanced 
+resampling strategy would reduce this tail, at the cost of reducing geographic 
+independence between train and test. 
+The operational implication is that per-query performance should not be interpreted 
+as uniform across the city. For downstream applications, it would be reasonable to 
+stratify reliability estimates by local database density and by the presence of 
+architecturally distinctive landmarks, rather than to rely on a single global metric such 
+as median error. 
+5.8. Positioning Against Standard VPR Benchmarks 
+A direct numerical comparison between our results and state-of-the-art scores on 
+Pittsburgh30k, Tokyo24/7 or Mapillary Street-Level Sequences (MSLS) is not 
+appropriate, because those benchmarks use different database sizes, different 
+query–database matching conventions, and different evaluation protocols (Berton et 
+al. 2022; Warburg et al. 2020). However, two qualitative observations can be safely 
+made. First, our main model's 81.24% R@1 at 100 m on Kırşehir is within the range 
+of performance reported by fine-tuned DINOv2 variants on Pittsburgh30k and MSLS 
+for fine-tuned backbones (Berton et al. 2022; Oquab et al. 2023), suggesting that the 
+fine-tuning recipe is not pathologically off. Second, the failure of LightGlue-based re-
+ranking on this dataset differs from results on benchmarks where re-ranking with 
+local matchers typically provides gains (Hausler et al. 2021; Lindenberger et al. 
+2023), which indicates that the gap is specific to the imagery and architectural 
+properties of Kırşehir rather than to the re-ranking methodology itself. Replicating 
+both observations on a standard benchmark (e.g., running the same fine-tuning and 
+re-ranking pipeline on MSLS or Pittsburgh30k) is an important item for future work. 
+5.9. Limitations 
+Several limitations of this study should be acknowledged. First, both the query and 
+the database images are drawn from the same source (Google Street View), so the 
+evaluation does not probe cross-source generalization. A realistic VPR deployment 
+would receive queries from mobile phone cameras or dashcams, which differ from 
+Street View imagery in lens distortion, resolution, exposure, and viewpoint height. 
+The framework for such a cross-source evaluation is already in place in our 
+demonstration pipeline, but a systematic study with a statistically meaningful number 
+of mobile-source queries remains future work. 
+Second, the dataset covers a single mid-sized Anatolian city. While this is precisely 
+the regime that motivates the study, the conclusions about CLS vs. GeM pooling and 
+about LightGlue-based re-ranking may not transfer to large, architecturally diverse 
+cities. Replication on a second city with similar characteristics (e.g., a similarly sized 
+Central Anatolian or Balkan city) would strengthen the generality of the domain-
+specific claims. 
+Third, all Street View imagery used here was captured during a single time window 
+and therefore does not test seasonal, illumination, or temporal robustness — an 
+aspect that long-term VPR benchmarks such as RobotCar Seasons or MSLS 
+explicitly address (Maddern et al. 2017; Warburg et al. 2020). Evaluating the 
+robustness of the fine-tuned model under temporal shift is a natural extension. 
+Fourth, LightGlue was used with its default configuration and with only two ranking 
+criteria (match count and a hybrid score). More sophisticated geometric verification, 
+such as RANSAC-based inlier counting or learned re-ranking heads, might behave 
+differently. Our results should therefore not be read as a general condemnation of 
+local feature matching for VPR, but as a domain-specific negative result for the 
+particular combination of DINOv2 global features, ALIKED keypoints, LightGlue 
+matching, and Google Street View imagery on a small Anatolian city. 
+Finally, the overall training protocol involves a single random seed and five epochs. 
+While the random seed was fixed for reproducibility and the training loss curves were 
+stable, repeated trials under multiple seeds would provide confidence intervals 
+around the reported metrics. This is particularly relevant for the comparison between 
+GeM and CLS pooling, where the observed gap is small. 
+5.10. Implications and Directions for Future Work 
+The findings of this study have three practical implications. (i) For VPR deployments 
+in mid-sized, architecturally homogeneous cities outside the dominant Western urban 
+distribution, foundation models such as DINOv2 require fine-tuning rather than zero-
+shot use, but the fine-tuning can be kept parameter-efficient by restricting adaptation 
+to the last few Transformer blocks. (ii) The default choice of pooling and re-ranking 
+components in the VPR literature should not be taken as universally optimal; the CLS 
+vs. GeM ablation and the negative LightGlue result illustrate that domain-specific 
+evaluation of these design choices is necessary. (iii) A single-stage ViT-S/14 pipeline 
+is a practical and near-lossless alternative to larger two-stage systems for this class 
+of deployments. 
+Five directions are particularly promising for future work. First, a systematic cross-
+source evaluation using mobile-phone-originating queries would quantify the domain 
+gap between Street View and consumer imagery and could be carried out with the 
+demonstration pipeline already developed in this study. Second, calibration-aware 
+confidence estimation — via temperature scaling, ensembles, or conformal retrieval 
+sets — would address the rejection limitation documented in Section 5.5. Third, 
+replicating the pipeline on standard benchmarks (Pittsburgh30k, Tokyo24/7, MSLS) 
+would enable a direct comparison against the VPR state of the art and clarify which 
+of the observations here generalize. Fourth, parameter-efficient adaptation 
+techniques such as LoRA (Hu et al. 2022) or learned adapters could further reduce 
+the number of trainable parameters and training time. Fifth, the release of the Kırşehir 
+dataset — or of a script that recreates it from the Google Street View API — would 
+enable replication and extension by other groups, consistent with the data-sharing 
+norms of the VPR community (Berton et al. 2022). 
+ 
+ 
+ 
+Conclusion 
+This study presented a systematic empirical investigation of foundation-model-based 
+visual place recognition on a mid-sized, architecturally homogeneous Anatolian city. 
+We constructed a 26,220-image Google Street View dataset covering approximately 
+28.80 km² of Kırşehir, organized around 6,555 unique coordinate points on 654 
+streets with four cardinal headings per point, and split geographically via a 0.002°-
+resolution grid to yield 18,140 training, 6,060 database, and 2,020 query images. On 
+this dataset we trained a two-stage pipeline combining a partially fine-tuned DINOv2 
+ViT-B/14 backbone with GeM pooling and a 512-dimensional projection head as the 
+global retrieval stage, and an ALIKED + LightGlue re-ranking module as the local-
+matching stage. A complementary set of ablations isolated the contributions of the 
+loss function, the pooling strategy, the backbone size, and the re-ranking criterion, 
+and additional analyses quantified the computational cost, the confidence-rejection 
+behavior, and the spatial distribution of errors. 
+6.1. Main Findings 
+Four findings stand out. First, partial fine-tuning of DINOv2 is both necessary and 
+highly effective in this visual regime: unfreezing the last four Transformer blocks 
+raised street-name accuracy from 56.14% to 74.70% and reduced the median 
+localization error from 49.8 m to 8.2 m. Second, contrary to the prevailing assumption 
+in the visual place recognition literature, the CLS-token variant of our architecture 
+slightly outperformed the GeM-pooled main model (76.58% vs. 74.70% street 
+accuracy, 5.3 m vs. 8.2 m median error), indicating that pooling choices for DINOv2-
+based pipelines should not be adopted uncritically on small, architecturally uniform 
+cities. Third, LightGlue-based re-ranking degraded the output of the first stage in 
+every configuration tested, whether applied uniformly (street accuracy dropping to 
+48.32–49.41%) or selectively to low-confidence queries (monotonic degradation 
+across all thresholds); this negative result is a concrete domain-specific limitation of 
+an otherwise well-established design pattern, traceable to the stitched nature of 
+Street View imagery, the repetitive textures of residential streets, and the already 
+near-optimal first-stage ranking. Fourth, the ViT-S/14 variant retained 94.5% of the 
+ViT-B/14 R@1<100 m performance while using 25.6% of the parameters and 34.3% 
+of the inference time, establishing a practical size–performance operating point for 
+deployment-oriented systems. 
+6.2. Contributions 
+The contributions of this work can be summarized as follows. (i) We introduced, to 
+our knowledge, the first dedicated visual place recognition dataset for a mid-sized 
+Anatolian city, constructed with a reproducible grid-based geographic split that 
+guards against spatial leakage. (ii) We reported a systematic ablation of the main 
+design choices in a DINOv2-based two-stage pipeline on this dataset, including a 
+non-standard comparison between patch-level GeM pooling and CLS-token 
+aggregation. (iii) We documented and analyzed a negative result — the consistent 
+failure of LightGlue-based re-ranking to improve upon a well-adapted global 
+descriptor on Street View imagery of a small Anatolian city — and proposed three 
+specific causes grounded in the properties of the data and the pipeline. (iv) We 
+showed that a single-stage ViT-S/14 configuration offers an attractive accuracy–
+efficiency trade-off for this class of deployment scenarios. (v) We provided an error 
+analysis that disentangles high-confidence perceptual aliasing (16.2% of errors, 
+concentrated on repetitive residential streets) from long-tail database-sparsity errors 
+(isolated test blocks with no nearby database anchors), highlighting that global 
+metrics alone are insufficient to characterize a VPR system's reliability across a city. 
+6.3. Practical Implications 
+From a practical standpoint, three implications follow directly from the results. First, 
+for VPR deployments outside the dominant Western urban distribution that motivates 
+most existing benchmarks, foundation models such as DINOv2 cannot be used zero-
+shot; a lightweight fine-tuning of the last few Transformer blocks on a city-specific 
+dataset is both necessary and sufficient to obtain strong performance. Second, the 
+standard global-then-local two-stage design cannot be assumed to generalize; 
+practitioners should treat the Stage-2 re-ranker as a hypothesis to be tested rather 
+than a default to be inherited, particularly when the imagery is stitched and the target 
+city is architecturally uniform. Third, a single-stage ViT-S/14 pipeline is a defensible 
+default choice for embedded and mobile deployment scenarios, where the 25.6% 
+parameter footprint and 2.9× speed-up may matter more than the small residual 
+performance gap. 
+6.4. Outlook 
+Several avenues extend directly from this study. The most immediate is a systematic 
+cross-source evaluation using consumer mobile-phone imagery, for which the 
+framework and demonstration pipeline are already in place. Equally important is the 
+replication of the pipeline on standard benchmarks (Pittsburgh30k, Tokyo24/7, MSLS) 
+to determine which of the observations reported here generalize, and the extension 
+of the dataset to include temporal variation (different seasons and capture periods) 
+so that long-term robustness can be assessed. Confidence calibration for retrieval — 
+a clear weakness highlighted by the rejection analysis — and parameter-efficient 
+adaptation techniques such as LoRA represent two further directions with concrete 
+potential to improve the practical reliability of the system. Finally, the public release of 
+the Kırşehir dataset, or of the scripts required to reconstruct it, would enable 
+independent replication and would contribute a non-Western data point to the 
+broader visual place recognition landscape. 
+Overall, the study supports a measured conclusion: foundation-model-based VPR is 
+mature enough to deliver strong single-city localization in under-represented urban 
+settings, but the design choices that are considered optimal on large Western 
+benchmarks do not automatically transfer. Careful, city-specific empirical validation 
+remains essential, and negative results — such as the one reported here for 
+LightGlue re-ranking on Kırşehir — are as informative as positive ones for guiding the 
+next generation of deployable VPR systems. 
+ 
+ 
+References 
+Ali-Bey A, Chaib-Draa B, and Giguere P. 2023. Mixvpr: Feature mixing for visual 
+place recognition. Proceedings of the IEEE/CVF winter conference on 
+applications of computer vision. p 2998–3007. 
+Anguelov D, Dulong C, Filip D, Frueh C, Lafon S, Lyon R, Ogale A, Vincent L, and 
+Weaver J. 2010. Google street view: Capturing the world at street level. 
+Computer 43:32–38.  
+Arandjelovic R, Gronat P, Torii A, Pajdla T, and Sivic J. 2016. NetVLAD: CNN 
+architecture for weakly supervised place recognition. Proceedings of the IEEE 
+conference on computer vision and pattern recognition. p 5297–5307. 
+Berton G, Masone C, and Caputo B. 2022. Rethinking visual geo-localization for 
+large-scale applications. Proceedings of the IEEE/CVF Conference on 
+Computer Vision and Pattern Recognition. p 4878–4888. 
+Bommasani R, Hudson DA, Adeli E, Altman R, Arora S, von Arx S, Bernstein MS, 
+Bohg J, Bosselut A, and Brunskill E. 2021. On the opportunities and risks of 
+foundation models. arXiv preprint arXiv:210807258.  
+Cummins M, and Newman P. 2008. FAB-MAP: Probabilistic localization and mapping 
+in the space of appearance. The International journal of robotics research 
+27:647–665.  
+Dosovitskiy A, Beyer L, Kolesnikov A, Weissenborn D, Zhai X, Unterthiner T, 
+Dehghani M, Minderer M, Heigold G, and Gelly S. 2020. An image is worth 
+16x16 words: Transformers for image recognition at scale. arXiv preprint 
+arXiv:201011929.  
+Douze M, Guzhva A, Deng C, Johnson J, Szilvasy G, Mazaré P-E, Lomeli M, 
+Hosseini L, and Jégou H. 2025. The faiss library. IEEE Transactions on Big 
+Data.  
+Guo C, Pleiss G, Sun Y, and Weinberger KQ. 2017. On calibration of modern neural 
+networks. International conference on machine learning: PMLR. p 1321–1330. 
+Hausler S, Garg S, Xu M, Milford M, and Fischer T. 2021. Patch-netvlad: Multi-scale 
+fusion of locally-global descriptors for place recognition. Proceedings of the 
+IEEE/CVF conference on computer vision and pattern recognition. p 14141–
+14152. 
+Hu EJ, Shen Y, Wallis P , Allen-Zhu Z, Li Y , Wang S, Wang L, and Chen W. 2022. 
+Lora: Low-rank adaptation of large language models. Iclr 1:3.  
+Lindenberger P, Sarlin P-E, and Pollefeys M. 2023. Lightglue: Local feature matching 
+at light speed. Proceedings of the IEEE/CVF international conference on 
+computer vision. p 17627–17638. 
+Lowry S, Sünderhauf N, Newman P, Leonard JJ, Cox D, Corke P, and Milford MJ. 
+2015. Visual place recognition: A survey. ieee transactions on robotics 32:1–
+19.  
+Maddern W, Pascoe G, Linegar C, and Newman P. 2017. 1 year, 1000 km: The 
+oxford robotcar dataset. The International journal of robotics research 36:3–
+15.  
+Musgrave K, Belongie S, and Lim S-N. 2020. Pytorch metric learning. arXiv preprint 
+arXiv:200809164.  
+Oquab M, Darcet T, Moutakanni T, Vo H, Szafraniec M, Khalidov V, Fernandez P, 
+Haziza D, Massa F, and El-Nouby A. 2023. Dinov2: Learning robust visual 
+features without supervision. arXiv preprint arXiv:230407193.  
+Radenović F, Tolias G, and Chum O. 2018. Fine-tuning CNN image retrieval with no 
+human annotation. IEEE transactions on pattern analysis and machine 
+intelligence 41:1655–1668.  
+Sattler T, Maddern W, Toft C, Torii A, Hammarstrand L, Stenborg E, Safari D, Okutomi 
+M, Pollefeys M, and Sivic J. 2018. Benchmarking 6dof outdoor visual 
+localization in changing conditions. Proceedings of the IEEE conference on 
+computer vision and pattern recognition. p 8601–8610. 
+Schroff F, Kalenichenko D, and Philbin J. 2015. Facenet: A unified embedding for 
+face recognition and clustering. Proceedings of the IEEE conference on 
+computer vision and pattern recognition. p 815–823. 
+Torii A, Arandjelovic R, Sivic J, Okutomi M, and Pajdla T. 2015. 24/7 place recognition 
+by view synthesis. Proceedings of the IEEE conference on computer vision 
+and pattern recognition. p 1808–1817. 
+Wang X, Han X, Huang W, Dong D, and Scott MR. 2019. Multi-similarity loss with 
+general pair weighting for deep metric learning. Proceedings of the IEEE/CVF 
+conference on computer vision and pattern recognition. p 5022–5030. 
+Warburg F, Hauberg S, Lopez-Antequera M, Gargallo P, Kuang Y, and Civera J. 
+2020. Mapillary street-level sequences: A dataset for lifelong place recognition. 
+Proceedings of the IEEE/CVF conference on computer vision and pattern 
+recognition. p 2626–2635. 
+Zhao X, Wu X, Chen W, Chen PC, Xu Q, and Li Z. 2023. Aliked: A lighter keypoint 
+and descriptor extraction network via deformable transformation. IEEE 
+Transactions on Instrumentation and Measurement 72:1–16.  
+ 
