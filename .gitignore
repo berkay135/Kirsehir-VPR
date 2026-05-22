@@ -1,10 +1,34 @@
-// Ignore the docx_images directory and the Kirsehir_VPR_CrossSource_Photos directory
-docx_images/
-Kirsehir_VPR_CrossSource_Photos/
+# Local Python environments
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
 
+# Notebook/runtime noise
+.ipynb_checkpoints/
+*.log
+*.tmp
 
-
-
-
+# Local datasets and generated image exports
 kirsehir_data/
-kirsehir_VPR_DINOv2_v5_Final
+Kirsehir_VPR_CrossSource_Photos/
+docx_images/
+
+# Model artifacts and retrieval indexes
+Kirsehir_VPR_DINOv2_v5_Final/
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Large local archives
+*.rar
+*.zip
+*.7z
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
